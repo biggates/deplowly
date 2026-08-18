@@ -14,6 +14,9 @@ from .watcher import start_watchers
 
 logger = structlog.get_logger(__name__)
 
+# 已知的子命令。非子命令参数（如配置文件路径）走原 "启动 watcher" 逻辑，保持兼容。
+_SUBCOMMANDS = {"rbac"}
+
 
 def _configure_logging() -> None:
     import logging
@@ -60,7 +63,15 @@ async def run(config_path: str) -> None:
 
 
 def main() -> None:
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+    argv = sys.argv[1:]
+    if argv and argv[0] in _SUBCOMMANDS:
+        if argv[0] == "rbac":
+            from . import rbac
+
+            sys.exit(rbac.main(argv[1:]))
+
+    # 兼容旧用法：deplowly [config_path]，直接启动 watcher
+    config_path = argv[0] if argv else "config.yaml"
     try:
         asyncio.run(run(config_path))
     except ConfigError as exc:

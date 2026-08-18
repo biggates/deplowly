@@ -9,7 +9,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/biggates/deplowly:latest
+    # image: ghcr.io/biggates/deplowly:latest
+    image: registry.cn-shenzhen.aliyuncs.com/eaphone-mirror/deplowly:latest
     container_name: deplowly
     restart: unless-stopped
     environment:

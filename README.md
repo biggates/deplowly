@@ -52,6 +52,27 @@ kubectl apply -f deploy/deployment.yaml
 
 > ⚠️ 安全提示：为了简化使用，deplowly 会读取业务 Deployment 的 `imagePullSecrets`，所以上述 SA 实际上能拿到业务镜像仓库的凭据，这在安全上属于「反模式」。因此不要在生产环境中使用。具体说明见 `deploy/rbac.yaml` 内的注释。
 
+## 为多 namespace 生成 RBAC
+
+deplowly 自身只部署在 *一个* namespace（默认 `deplowly`），但它监控的 Deployment 往往散落在多个 namespace。每个目标 namespace 都需要一份独立的 `Role` + `RoleBinding`，把 `deplowly` 这个 ServiceAccount 绑定进去并授权该 ns 的 `deployments`/`secrets`。
+
+与其手写多份 YAML，可以直接用 deplowly 自己生成：
+
+```bash
+# 从配置文件读取所有要监控的 namespace（自动排除 deplowly 自身所在 ns）
+uv run python -m deplowly rbac --from-config config.yaml | kubectl apply -f -
+
+# 或者直接指定目标 namespace
+uv run python -m deplowly rbac --namespace prod --namespace staging -o rbac-targets.yaml
+
+# 自定义 ServiceAccount 名 / 所在 namespace（若你没用默认的 deplowly）
+uv run python -m deplowly rbac --namespace prod --sa-name deplowly --sa-namespace deplowly
+```
+
+生成结果包含每个目标 namespace 的 `Role`（deployments 的 get/list/patch + secrets 的 get/list）和 `RoleBinding`（把指定 SA 绑定到该 Role），可直接 `kubectl apply`。
+
+> 注：ServiceAccount 本身只需按 `deploy/rbac.yaml` 在 deplowly 所在 namespace 创建一次；本项目生成的清单不含 ServiceAccount，避免重复 apply 报错。
+
 ## 特性
 
 - 仅比对远端 digest，不依赖镜像 tag 是否变化

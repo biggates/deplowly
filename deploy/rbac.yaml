@@ -21,22 +21,22 @@ metadata:
   name: deplowly
   namespace: deplowly
 rules:
-  # 读取目标命名空间的 Deployment（含其 image / imagePullSecrets 信息）
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list"]
-  # 对目标 Deployment 打 rollout restart annotation（patch spec.template.metadata）
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["patch"]
-  # 读取业务 imagePullSecrets 对应的 Secret（含 .dockerconfigjson）
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list"]
-  # 读取 ServiceAccount（用于解析 imagePullSecrets 的引用关系，如未来扩展）
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    verbs: ["get", "list"]
+# 读取目标命名空间的 Deployment（含其 image / imagePullSecrets 信息）
+- apiGroups: [ "" ]
+  resources: [ "deployments" ]
+  verbs: [ "get", "list" ]
+# 对目标 Deployment 打 rollout restart annotation（patch spec.template.metadata）
+- apiGroups: [ "" ]
+  resources: [ "deployments" ]
+  verbs: [ "patch" ]
+# 读取业务 imagePullSecrets 对应的 Secret（含 .dockerconfigjson）
+- apiGroups: [ "" ]
+  resources: [ "secrets" ]
+  verbs: [ "get", "list" ]
+# 读取 ServiceAccount（用于解析 imagePullSecrets 的引用关系，如未来扩展）
+- apiGroups: [ "" ]
+  resources: [ "serviceaccounts" ]
+  verbs: [ "get", "list" ]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -48,6 +48,6 @@ roleRef:
   kind: Role
   name: deplowly
 subjects:
-  - kind: ServiceAccount
-    name: deplowly
-    namespace: deplowly
+- kind: ServiceAccount
+  name: deplowly
+  namespace: deplowly
