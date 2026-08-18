@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 import requests
 import structlog
@@ -10,6 +13,9 @@ logger = structlog.get_logger(__name__)
 
 # repo@sha256:... -> digest is pinned, nothing to watch.
 SHA256_IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}$", re.IGNORECASE)
+
+# Bearer realm="...",service="...",scope="..." -> {"realm": ..., ...}
+WWW_AUTH_PARAM_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
 
 
 @dataclass
@@ -61,6 +67,95 @@ def _registry_scheme_host(registry: str) -> str:
     return f"https://{registry}"
 
 
+def _extract_creds(auth: Mapping[str, object] | None) -> tuple[str, str] | None:
+    """Extract (username, password) from a dockerconfigjson auth entry.
+
+    Entries may carry explicit username/password fields (kubectl style), or
+    the combined base64 "auth" field written by `docker login`. Returns None
+    when the entry carries no usable credentials.
+    """
+    if not auth:
+        return None
+    username = str(auth.get("username") or "")
+    password = str(auth.get("password") or "")
+    if username or password:
+        return username, password
+    b64 = auth.get("auth")
+    if isinstance(b64, str) and b64:
+        try:
+            decoded = base64.b64decode(b64).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            logger.warning("failed to decode docker config auth field")
+            return None
+        user, _, pwd = decoded.partition(":")
+        if user or pwd:
+            return user, pwd
+    return None
+
+
+def _parse_www_authenticate(header: str) -> dict[str, str]:
+    """Parse a WWW-Authenticate challenge into its parameters.
+
+    Example::
+
+        Bearer realm="https://.../auth",service="...",scope="..."  ->
+        {"realm": ..., "service": ..., "scope": ...}
+    """
+    return {k: v for k, v in WWW_AUTH_PARAM_RE.findall(header)}
+
+
+def _head_manifest(
+    session: requests.Session,
+    url: str,
+    headers: dict[str, str],
+    bearer: str | None = None,
+    basic: tuple[str, str] | None = None,
+) -> requests.Response:
+    req_headers = dict(headers)
+    if bearer:
+        req_headers["Authorization"] = f"Bearer {bearer}"
+    return session.head(url, headers=req_headers, timeout=15.0, auth=basic)
+
+
+def _fetch_token(
+    session: requests.Session,
+    challenge: str,
+    base: str,
+    creds: tuple[str, str] | None,
+    ref: ImageRef,
+) -> str | None:
+    """Resolve a bearer token following the Docker Registry v2 token flow.
+
+    Extracts the realm / service / scope from the WWW-Authenticate challenge,
+    requests a token from the realm (sending basic credentials when
+    available), and returns the token on success. Returns None when the
+    challenge has no realm or the token request fails.
+    """
+    params = _parse_www_authenticate(challenge)
+    realm = params.get("realm")
+    if not realm:
+        logger.warning("WWW-Authenticate challenge has no realm", registry=ref.registry, challenge=challenge)
+        return None
+    if realm.startswith("/"):
+        realm = urljoin(base, realm)
+    query = {
+        "service": params.get("service", ref.registry),
+        "scope": params.get("scope", f"repository:{ref.repo}:pull"),
+    }
+    try:
+        resp = session.get(realm, params=query, timeout=15.0, auth=creds)
+        resp.raise_for_status()
+        payload = resp.json()
+        token = payload.get("token") or payload.get("access_token")
+        if not token:
+            logger.error("token response has no token field", registry=ref.registry, realm=realm)
+            return None
+        return token
+    except requests.RequestException as exc:
+        logger.error("token fetch failed", registry=ref.registry, realm=realm, error=str(exc))
+        return None
+
+
 def get_remote_digest(
     image: str,
     auths: dict[str, dict[str, str]] | None = None,
@@ -78,24 +173,52 @@ def get_remote_digest(
     auths = auths or {}
     base = _registry_scheme_host(ref.registry)
     auth = auths.get(ref.registry) or auths.get(_normalize_registry(ref.registry))
+    creds = _extract_creds(auth) if auth else None
+    logger.debug(
+        "registry auth lookup",
+        image=image,
+        registry=ref.registry,
+        creds_found=bool(creds),
+    )
 
     headers: dict[str, str] = {"Accept": "application/vnd.docker.distribution.manifest.v2+json"}
-    creds: tuple[str, str] | None = None
-    if auth:
-        creds = (str(auth.get("username", "")), str(auth.get("password", "")))
+    manifest_url = f"{base}/v2/{ref.repo}/manifests/{ref.tag}"
 
     with requests.Session() as session:
-        manifest_url = f"{base}/v2/{ref.repo}/manifests/{ref.tag}"
         try:
-            resp = session.head(manifest_url, headers=headers, timeout=15.0, auth=creds)
-            if resp.status_code == 401 and not creds:
-                token = _fetch_token(session, base, ref)
-                if token:
-                    resp = session.head(
-                        manifest_url,
-                        headers={**headers, "Authorization": f"Bearer {token}"},
-                        timeout=15.0,
-                    )
+            resp = _head_manifest(session, manifest_url, headers, basic=creds)
+            if resp.status_code == 401:
+                challenge = resp.headers.get("WWW-Authenticate", "")
+                logger.debug("registry returned 401 challenge", image=image, challenge=challenge)
+                scheme = challenge.split(" ", 1)[0].strip().lower() if challenge else ""
+                match scheme:
+                    case "bearer":
+                        token = _fetch_token(session, challenge, base, creds, ref)
+                        if token:
+                            resp = _head_manifest(session, manifest_url, headers, bearer=token)
+                        else:
+                            logger.warning(
+                                "could not obtain bearer token, keeping original 401 response",
+                                image=image,
+                            )
+                    case "basic":
+                        if not creds:
+                            logger.warning(
+                                "registry requires basic auth but no credentials available",
+                                image=image,
+                            )
+                    case "":
+                        logger.warning("registry returned 401 without WWW-Authenticate", image=image)
+                    case _:
+                        logger.warning("unsupported auth challenge scheme", image=image, scheme=scheme)
+            if resp.status_code == 401 and "insufficient_scope" in resp.headers.get("WWW-Authenticate", ""):
+                logger.error(
+                    "registry authentication failed (insufficient_scope): imagePullSecret credentials "
+                    "missing, wrong, or lacking pull access",
+                    image=image,
+                    registry=ref.registry,
+                )
+                return None
             resp.raise_for_status()
             digest = resp.headers.get("Docker-Content-Digest")
             if not digest:
@@ -103,30 +226,12 @@ def get_remote_digest(
                 return None
             return digest
         except requests.HTTPError as exc:
-            logger.error(
-                "registry http error",
-                image=image,
-                status=exc.response.status_code,  # type: ignore[union-attr]
-            )
+            status = exc.response.status_code if exc.response is not None else None
+            logger.error("registry http error", image=image, status=status)
             return None
         except requests.RequestException as exc:
             logger.error("registry request failed", image=image, error=str(exc))
             return None
-
-
-def _fetch_token(session: requests.Session, base: str, ref: ImageRef) -> str | None:
-    """Fetch a bearer token using the v2 token endpoint."""
-    params = {
-        "service": ref.registry,
-        "scope": f"repository:{ref.repo}:pull",
-    }
-    try:
-        resp = session.get(f"{base}/v2/token", params=params, timeout=15.0)
-        resp.raise_for_status()
-        return resp.json().get("token")
-    except requests.RequestException as exc:
-        logger.error("token fetch failed", registry=ref.registry, error=str(exc))
-        return None
 
 
 def _normalize_registry(registry: str) -> str:

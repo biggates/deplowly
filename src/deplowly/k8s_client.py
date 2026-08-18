@@ -4,6 +4,7 @@ import asyncio
 import base64
 import datetime
 import json
+import os
 from typing import Any
 
 import structlog
@@ -45,11 +46,16 @@ class K8sClient:
             raise
         self._apps = self._client.resource("apps/v1", "deployments")
         self._core = self._client.resource("v1", "secrets")
+        logger.debug(
+            "k8s client initialized",
+            in_cluster=bool(os.environ.get("KUBERNETES_SERVICE_HOST")),
+        )
 
     async def get_deployment_image_specs(self, namespace: str, deployment: str) -> list[str]:
         """Return every container image (init + regular) of a Deployment."""
 
         def _sync() -> list[str]:
+            logger.debug("get deployment image specs", namespace=namespace, deployment=deployment)
             dep = self._apps.get(name=deployment, namespace=namespace)
             spec = dep["spec"]["template"]["spec"]
             images: list[str] = []
@@ -59,36 +65,83 @@ class K8sClient:
             for c in spec.get("containers") or []:
                 if c.get("image"):
                     images.append(c["image"])
+            logger.debug(
+                "got deployment image specs",
+                namespace=namespace,
+                deployment=deployment,
+                image_count=len(images),
+            )
             return images
 
-        return await asyncio.to_thread(_sync)
+        try:
+            return await asyncio.to_thread(_sync)
+        except Exception as exc:  # noqa: BLE001 - surface as debug for triage
+            logger.debug(
+                "get deployment image specs failed",
+                namespace=namespace,
+                deployment=deployment,
+                error=str(exc),
+            )
+            raise
 
     async def get_image_pull_secrets(self, namespace: str, deployment: str) -> list[str]:
         """Return the PodSpec-level imagePullSecret names of a Deployment."""
 
         def _sync() -> list[str]:
+            logger.debug("get imagePullSecrets", namespace=namespace, deployment=deployment)
             dep = self._apps.get(name=deployment, namespace=namespace)
             spec = dep["spec"]["template"]["spec"]
             secrets = spec.get("imagePullSecrets") or []
-            if not secrets:
-                return []
-            return [s["name"] for s in secrets]
+            names = [s["name"] for s in secrets] if secrets else []
+            logger.debug(
+                "got imagePullSecrets",
+                namespace=namespace,
+                deployment=deployment,
+                secret_count=len(names),
+            )
+            return names
 
-        return await asyncio.to_thread(_sync)
+        try:
+            return await asyncio.to_thread(_sync)
+        except Exception as exc:  # noqa: BLE001 - surface as debug for triage
+            logger.debug(
+                "get imagePullSecrets failed",
+                namespace=namespace,
+                deployment=deployment,
+                error=str(exc),
+            )
+            raise
 
     async def read_secret_dockerconfigjson(self, namespace: str, name: str) -> dict[str, Any]:
         """Read a Secret and return the parsed ``.dockerconfigjson`` auths map."""
 
         def _sync() -> dict[str, Any]:
+            logger.debug("read secret .dockerconfigjson", namespace=namespace, name=name)
             secret = self._core.get(name=name, namespace=namespace)
             data = secret.get("data") or {}
             raw = data.get(".dockerconfigjson")
             if not raw:
                 raise KeyError(f"secret {namespace}/{name} has no .dockerconfigjson")
             decoded = base64.b64decode(raw).decode("utf-8")
-            return json.loads(decoded).get("auths", {})
+            auths = json.loads(decoded).get("auths", {})
+            logger.debug(
+                "read secret .dockerconfigjson ok",
+                namespace=namespace,
+                name=name,
+                host_count=len(auths),
+            )
+            return auths
 
-        return await asyncio.to_thread(_sync)
+        try:
+            return await asyncio.to_thread(_sync)
+        except Exception as exc:  # noqa: BLE001 - surface as debug for triage
+            logger.debug(
+                "read secret .dockerconfigjson failed",
+                namespace=namespace,
+                name=name,
+                error=str(exc),
+            )
+            raise
 
     async def patch_restart_annotation(self, namespace: str, deployment: str) -> None:
         """Trigger a rollout restart by patching the restartedAt annotation."""
@@ -97,6 +150,13 @@ class K8sClient:
 
         def _sync() -> None:
             body = {"spec": {"template": {"metadata": {"annotations": {RESTART_ANNOTATION: now}}}}}
+            logger.debug(
+                "patch restart annotation",
+                namespace=namespace,
+                deployment=deployment,
+                patch_type=PATCH_TYPE,
+                body=body,
+            )
             self._apps.patch(
                 name=deployment,
                 namespace=namespace,

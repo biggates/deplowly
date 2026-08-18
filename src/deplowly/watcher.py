@@ -48,7 +48,10 @@ async def _check_target(k8s: K8sClient, target: Target, state: State) -> None:
         logger.warning("deployment has no container images", target=target.key)
         return
 
+    logger.debug("checking target", target=target.key, images=images)
+
     auths = await _resolve_auths(k8s, target)
+    logger.debug("resolved registry auths", target=target.key, hosts=list(auths.keys()))
 
     per_container: list[tuple[str, str]] = []
     for image in images:
@@ -66,6 +69,7 @@ async def _check_target(k8s: K8sClient, target: Target, state: State) -> None:
         per_container.append((image, digest))
 
     aggregated = _aggregate(per_container)
+    logger.debug("aggregated digest", target=target.key, digest=aggregated, prev=state.get(target.key))
     if not state.has(target.key):
         # cold-start baseline: record but do not restart
         state.set(target.key, aggregated)
