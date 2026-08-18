@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from deplowly.registry import get_remote_digest, parse_image
 
 
@@ -26,7 +28,7 @@ def test_parse_image_pinned() -> None:
 
 async def test_get_remote_digest_pinned_is_none() -> None:
     img = "registry.example.com/foo/bar@sha256:" + "a" * 64
-    assert await get_remote_digest(img) is None
+    assert get_remote_digest(img) is None
 
 
 async def test_get_remote_digest_success() -> None:
@@ -40,28 +42,34 @@ async def test_get_remote_digest_success() -> None:
         def raise_for_status(self) -> None:
             pass
 
-    class FakeClient:
+    class FakeSession:
         def __init__(self, *a: object, **k: object) -> None:
             pass
 
-        async def __aenter__(self) -> FakeClient:
+        def __enter__(self) -> FakeSession:
             return self
 
-        async def __aexit__(self, *a: object) -> None:
+        def __exit__(self, *a: object) -> None:
             pass
 
-        async def head(self, url: str, headers: dict | None = None) -> FakeResp:
+        def head(
+            self,
+            url: str,
+            headers: dict | None = None,
+            timeout: float = 0,
+            auth: object = None,
+        ) -> FakeResp:
             calls.append(url)
             return FakeResp()
 
     import deplowly.registry as reg
 
-    orig = reg.httpx.AsyncClient
-    reg.httpx.AsyncClient = FakeClient
+    orig = reg.requests.Session
+    reg.requests.Session = FakeSession  # type: ignore[assignment]
     try:
-        digest = await get_remote_digest(img)
+        digest = await asyncio.to_thread(get_remote_digest, img)
     finally:
-        reg.httpx.AsyncClient = orig
+        reg.requests.Session = orig  # type: ignore[assignment]
     assert digest == "sha256:deadbeef"
     assert calls and "/v2/foo/bar/manifests/latest" in calls[0]
 
@@ -74,28 +82,34 @@ async def test_get_remote_digest_failure_returns_none() -> None:
         headers: dict[str, str] = {}
 
         def raise_for_status(self) -> None:
-            import httpx
+            import requests
 
-            raise httpx.HTTPStatusError("boom", request=None, response=self)  # type: ignore[arg-type]
+            raise requests.HTTPError("boom", response=self)  # type: ignore[arg-type]
 
-    class FakeClient:
+    class FakeSession:
         def __init__(self, *a: object, **k: object) -> None:
             pass
 
-        async def __aenter__(self) -> FakeClient:
+        def __enter__(self) -> FakeSession:
             return self
 
-        async def __aexit__(self, *a: object) -> None:
+        def __exit__(self, *a: object) -> None:
             pass
 
-        async def head(self, url: str, headers: dict | None = None) -> FakeResp:
+        def head(
+            self,
+            url: str,
+            headers: dict | None = None,
+            timeout: float = 0,
+            auth: object = None,
+        ) -> FakeResp:
             return FakeResp()
 
     import deplowly.registry as reg
 
-    orig = reg.httpx.AsyncClient
-    reg.httpx.AsyncClient = FakeClient
+    orig = reg.requests.Session
+    reg.requests.Session = FakeSession  # type: ignore[assignment]
     try:
-        assert await get_remote_digest(img) is None
+        assert await asyncio.to_thread(get_remote_digest, img) is None
     finally:
-        reg.httpx.AsyncClient = orig
+        reg.requests.Session = orig  # type: ignore[assignment]

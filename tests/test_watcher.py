@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from deplowly.models import Target
 from deplowly.state import State
@@ -37,10 +37,10 @@ class FakeK8s:
 def _mock_digest(k8s: FakeK8s):
     """Patch registry.get_remote_digest to return digests from FakeK8s."""
 
-    async def _fake(image: str, auths=None) -> str | None:
+    def _fake(image: str, auths=None) -> str | None:
         return k8s._digests.get(image)
 
-    return patch("deplowly.watcher.get_remote_digest", new=AsyncMock(side_effect=_fake))
+    return patch("deplowly.watcher.get_remote_digest", new=_fake)
 
 
 async def test_baseline_recorded_no_restart() -> None:
@@ -84,11 +84,11 @@ async def test_pinned_image_stable() -> None:
 async def test_registry_failure_skips_round() -> None:
     k8s = FakeK8s(images=["nginx:latest"], digests={})  # no digest -> None
 
-    async def _none(image: str, auths=None) -> str | None:
+    def _none(image: str, auths=None) -> str | None:
         return None
 
     state = State()
-    with patch("deplowly.watcher.get_remote_digest", new=AsyncMock(side_effect=_none)):
+    with patch("deplowly.watcher.get_remote_digest", new=_none):
         await _check_target(k8s, TARGET, state)
     assert not state.has("prod/web")
     assert k8s.restarted == []

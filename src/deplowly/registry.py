@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-import httpx
+import requests
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -61,7 +61,7 @@ def _registry_scheme_host(registry: str) -> str:
     return f"https://{registry}"
 
 
-async def get_remote_digest(
+def get_remote_digest(
     image: str,
     auths: dict[str, dict[str, str]] | None = None,
 ) -> str | None:
@@ -84,15 +84,17 @@ async def get_remote_digest(
     if auth:
         creds = (str(auth.get("username", "")), str(auth.get("password", "")))
 
-    async with httpx.AsyncClient(base_url=base, timeout=15.0, auth=creds) as client:
-        manifest_url = f"/v2/{ref.repo}/manifests/{ref.tag}"
+    with requests.Session() as session:
+        manifest_url = f"{base}/v2/{ref.repo}/manifests/{ref.tag}"
         try:
-            resp = await client.head(manifest_url, headers=headers)
+            resp = session.head(manifest_url, headers=headers, timeout=15.0, auth=creds)
             if resp.status_code == 401 and not creds:
-                token = await _fetch_token(client, ref)
+                token = _fetch_token(session, base, ref)
                 if token:
-                    resp = await client.head(
-                        manifest_url, headers={**headers, "Authorization": f"Bearer {token}"}
+                    resp = session.head(
+                        manifest_url,
+                        headers={**headers, "Authorization": f"Bearer {token}"},
+                        timeout=15.0,
                     )
             resp.raise_for_status()
             digest = resp.headers.get("Docker-Content-Digest")
@@ -100,29 +102,29 @@ async def get_remote_digest(
                 logger.error("registry returned no digest", image=image, status=resp.status_code)
                 return None
             return digest
-        except httpx.HTTPStatusError as exc:
+        except requests.HTTPError as exc:
             logger.error(
                 "registry http error",
                 image=image,
-                status=exc.response.status_code,
+                status=exc.response.status_code,  # type: ignore[union-attr]
             )
             return None
-        except httpx.HTTPError as exc:
+        except requests.RequestException as exc:
             logger.error("registry request failed", image=image, error=str(exc))
             return None
 
 
-async def _fetch_token(client: httpx.AsyncClient, ref: ImageRef) -> str | None:
+def _fetch_token(session: requests.Session, base: str, ref: ImageRef) -> str | None:
     """Fetch a bearer token using the v2 token endpoint."""
     params = {
         "service": ref.registry,
         "scope": f"repository:{ref.repo}:pull",
     }
     try:
-        resp = await client.get("/v2/token", params=params)
+        resp = session.get(f"{base}/v2/token", params=params, timeout=15.0)
         resp.raise_for_status()
         return resp.json().get("token")
-    except httpx.HTTPError as exc:
+    except requests.RequestException as exc:
         logger.error("token fetch failed", registry=ref.registry, error=str(exc))
         return None
 

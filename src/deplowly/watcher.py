@@ -58,7 +58,7 @@ async def _check_target(k8s: K8sClient, target: Target, state: State) -> None:
             # the aggregate stays stable without triggering a restart.
             per_container.append((image, ref.raw.split("@", 1)[1]))
             continue
-        digest = await get_remote_digest(image, auths)
+        digest = await asyncio.to_thread(get_remote_digest, image, auths)
         if digest is None:
             # registry failure -> conservative skip, try next round
             logger.warning("skipping target round due to registry failure", target=target.key)
