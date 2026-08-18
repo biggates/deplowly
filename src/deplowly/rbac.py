@@ -24,7 +24,8 @@ from .models import Config
 # reference. These are the same rules as deploy/rbac.yaml.
 _ROLE_RULES: list[dict] = [
     {
-        "apiGroups": [""],
+        # deployments live in the "apps" API group, not the core ("") group.
+        "apiGroups": ["apps"],
         "resources": ["deployments"],
         "verbs": ["get", "list", "patch"],
     },
