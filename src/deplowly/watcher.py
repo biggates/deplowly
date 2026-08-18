@@ -43,12 +43,14 @@ async def _resolve_auths(k8s: K8sClient, target: Target) -> dict[str, dict[str, 
 
 async def _check_target(k8s: K8sClient, target: Target, state: State) -> None:
     """One round of digest comparison for a single target."""
+    logger.debug("checking target", target=target.key)
+
     images = await k8s.get_deployment_image_specs(target.namespace, target.deployment)
     if not images:
         logger.warning("deployment has no container images", target=target.key)
         return
 
-    logger.debug("checking target", target=target.key, images=images)
+    logger.debug("fetched deployment images", target=target.key, images=images)
 
     auths = await _resolve_auths(k8s, target)
     logger.debug("resolved registry auths", target=target.key, hosts=list(auths.keys()))
@@ -69,7 +71,12 @@ async def _check_target(k8s: K8sClient, target: Target, state: State) -> None:
         per_container.append((image, digest))
 
     aggregated = _aggregate(per_container)
-    logger.debug("aggregated digest", target=target.key, digest=aggregated, prev=state.get(target.key))
+    logger.debug(
+        "check completed",
+        target=target.key,
+        digest=aggregated,
+        prev=state.get(target.key),
+    )
     if not state.has(target.key):
         # cold-start baseline: record but do not restart
         state.set(target.key, aggregated)
@@ -77,9 +84,12 @@ async def _check_target(k8s: K8sClient, target: Target, state: State) -> None:
         return
 
     if state.get(target.key) != aggregated:
-        logger.info("digest changed, restarting", target=target.key, digest=aggregated)
+        logger.debug("update detected, restarting deployment", target=target.key, digest=aggregated)
         await k8s.patch_restart_annotation(target.namespace, target.deployment)
         state.set(target.key, aggregated)
+        logger.info("rollout completed", target=target.key, digest=aggregated)
+    else:
+        logger.debug("no update", target=target.key)
 
 
 async def watch_target(k8s: K8sClient, target: Target, state: State, interval: int) -> None:
