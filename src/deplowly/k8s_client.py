@@ -11,6 +11,11 @@ from kubernetes_lite.client import DynamicClient
 
 logger = structlog.get_logger(__name__)
 
+
+class K8sConfigError(RuntimeError):
+    """Raised when the Kubernetes configuration cannot be loaded."""
+
+
 RESTART_ANNOTATION = "kubectl.kubernetes.io/restartedAt"
 # Strategic merge patch, the same patch type the official client uses by default.
 PATCH_TYPE = "application/strategic-merge-patch+json"
@@ -27,7 +32,17 @@ class K8sClient:
         # DynamicClient() without explicit config uses controller-runtime's
         # GetConfig, which loads the in-cluster config when running inside a
         # pod and falls back to the local kubeconfig otherwise.
-        self._client = DynamicClient()
+        try:
+            self._client = DynamicClient()
+        except RuntimeError as exc:
+            message = str(exc)
+            if "no configuration has been provided" in message:
+                raise K8sConfigError(
+                    "无法加载 Kubernetes 配置。请确认已在集群内运行（自动读取 in-cluster "
+                    "config），或在集群外通过 KUBECONFIG 环境变量 / 默认 kubeconfig 文件 "
+                    "提供有效的配置。"
+                ) from exc
+            raise
         self._apps = self._client.resource("apps/v1", "deployments")
         self._core = self._client.resource("v1", "secrets")
 

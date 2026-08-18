@@ -8,7 +8,7 @@ import sys
 import structlog
 
 from .config import ConfigError, load_config
-from .k8s_client import K8sClient
+from .k8s_client import K8sClient, K8sConfigError
 from .state import State
 from .watcher import start_watchers
 
@@ -65,6 +65,9 @@ def main() -> None:
         asyncio.run(run(config_path))
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except K8sConfigError as exc:
+        print(f"kubernetes config error: {exc}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:  # pragma: no cover
         pass
