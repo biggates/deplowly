@@ -3,9 +3,9 @@ name = "deplowly"
 version = "0.1.0"
 description = "In-cluster Kubernetes Deployment image-watchdog that auto rollout-restarts on registry digest change."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "kubernetes>=30.1.0",
+    "kubernetes_lite>=0.1.0",
     "pyyaml>=6.0.1",
     "requests>=2.32.0",
     "structlog>=24.1.0",

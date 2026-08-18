@@ -1,46 +1,49 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import datetime
+import json
 from typing import Any
 
 import structlog
-from kubernetes import client
-from kubernetes.config import ConfigException, load_incluster_config
+from kubernetes_lite.client import DynamicClient
 
 logger = structlog.get_logger(__name__)
 
 RESTART_ANNOTATION = "kubectl.kubernetes.io/restartedAt"
+# Strategic merge patch, the same patch type the official client uses by default.
+PATCH_TYPE = "application/strategic-merge-patch+json"
 
 
 class K8sClient:
-    """Thin wrapper around the sync kubernetes client.
+    """Thin wrapper around the kubernetes_lite dynamic client.
 
     All blocking API calls are dispatched through ``asyncio.to_thread`` so the
     event loop is never stalled by a slow apiserver call.
     """
 
     def __init__(self) -> None:
-        try:
-            load_incluster_config()
-        except ConfigException as exc:  # pragma: no cover - depends on runtime env
-            logger.error("failed to load in-cluster config", error=str(exc))
-            raise
-        self._apps = client.AppsV1Api()
-        self._core = client.CoreV1Api()
+        # DynamicClient() without explicit config uses controller-runtime's
+        # GetConfig, which loads the in-cluster config when running inside a
+        # pod and falls back to the local kubeconfig otherwise.
+        self._client = DynamicClient()
+        self._apps = self._client.resource("apps/v1", "deployments")
+        self._core = self._client.resource("v1", "secrets")
 
     async def get_deployment_image_specs(self, namespace: str, deployment: str) -> list[str]:
         """Return every container image (init + regular) of a Deployment."""
 
         def _sync() -> list[str]:
-            dep = self._apps.read_namespaced_deployment(deployment, namespace)
-            spec = dep.spec.template.spec
+            dep = self._apps.get(name=deployment, namespace=namespace)
+            spec = dep["spec"]["template"]["spec"]
             images: list[str] = []
-            for c in spec.init_containers or []:
-                if c.image:
-                    images.append(c.image)
-            for c in spec.containers:
-                if c.image:
-                    images.append(c.image)
+            for c in spec.get("initContainers") or []:
+                if c.get("image"):
+                    images.append(c["image"])
+            for c in spec.get("containers") or []:
+                if c.get("image"):
+                    images.append(c["image"])
             return images
 
         return await asyncio.to_thread(_sync)
@@ -49,11 +52,12 @@ class K8sClient:
         """Return the PodSpec-level imagePullSecret names of a Deployment."""
 
         def _sync() -> list[str]:
-            dep = self._apps.read_namespaced_deployment(deployment, namespace)
-            spec = dep.spec.template.spec
-            if not spec.image_pull_secrets:
+            dep = self._apps.get(name=deployment, namespace=namespace)
+            spec = dep["spec"]["template"]["spec"]
+            secrets = spec.get("imagePullSecrets") or []
+            if not secrets:
                 return []
-            return [s.name for s in spec.image_pull_secrets]
+            return [s["name"] for s in secrets]
 
         return await asyncio.to_thread(_sync)
 
@@ -61,16 +65,12 @@ class K8sClient:
         """Read a Secret and return the parsed ``.dockerconfigjson`` auths map."""
 
         def _sync() -> dict[str, Any]:
-            secret = self._core.read_namespaced_secret(name, namespace)
-            data = secret.data or {}
+            secret = self._core.get(name=name, namespace=namespace)
+            data = secret.get("data") or {}
             raw = data.get(".dockerconfigjson")
             if not raw:
                 raise KeyError(f"secret {namespace}/{name} has no .dockerconfigjson")
-            import base64
-
             decoded = base64.b64decode(raw).decode("utf-8")
-            import json
-
             return json.loads(decoded).get("auths", {})
 
         return await asyncio.to_thread(_sync)
@@ -78,13 +78,16 @@ class K8sClient:
     async def patch_restart_annotation(self, namespace: str, deployment: str) -> None:
         """Trigger a rollout restart by patching the restartedAt annotation."""
 
-        import datetime
-
         now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         def _sync() -> None:
             body = {"spec": {"template": {"metadata": {"annotations": {RESTART_ANNOTATION: now}}}}}
-            self._apps.patch_namespaced_deployment(name=deployment, namespace=namespace, body=body)
+            self._apps.patch(
+                name=deployment,
+                namespace=namespace,
+                patch_type=PATCH_TYPE,
+                patch_data=body,
+            )
 
         await asyncio.to_thread(_sync)
         logger.info("triggered rollout restart", namespace=namespace, deployment=deployment)

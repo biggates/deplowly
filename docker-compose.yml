@@ -1,0 +1,20 @@
+# 用 docker compose 构建并运行 deplowly
+# 构建+启动：  docker compose up -d --build
+# 仅构建镜像： docker compose build
+# 查看日志：   docker compose logs -f
+# 停止：       docker compose down
+
+services:
+  deplowly:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: biggates/deplowly:latest
+    container_name: deplowly
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: "INFO"
+    # 本地运行用宿主机的 config.yaml；部署到 k8s 时用 deploy/ 里的 ConfigMap
+    volumes:
+      - ./config.yaml:/etc/deplowly/config.yaml:ro
+    command: ["/etc/deplowly/config.yaml"]
