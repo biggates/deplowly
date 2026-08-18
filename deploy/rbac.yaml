@@ -1,0 +1,53 @@
+# deplowly RBAC
+#
+# 安全风险说明：
+#   deplowly 需要读取业务 Deployment 引用的 imagePullSecrets（即业务镜像仓库
+#   的拉取凭据），因此 Role 必须包含对 `secrets` 的 get/list 权限。
+#   这意味着 deplowly 的 ServiceAccount 实际上持有了业务镜像仓库的凭据，
+#   属于"第三方 watcher 持有业务凭据"的反模式。生产环境更推荐：
+#     1) 为 deplowly 单独创建一个专属的 pull secret + 受限 SA，仅授权它需要的
+#        那几个 registry；或
+#     2) 让目标 Deployment 使用与 deplowly 共享的、仅含 pull 权限的 secret。
+#   本配置按"复用业务 secret"的需求实现，使用方需知悉上述风险。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deplowly
+  namespace: deplowly
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deplowly
+  namespace: deplowly
+rules:
+  # 读取目标命名空间的 Deployment（含其 image / imagePullSecrets 信息）
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  # 对目标 Deployment 打 rollout restart annotation（patch spec.template.metadata）
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["patch"]
+  # 读取业务 imagePullSecrets 对应的 Secret（含 .dockerconfigjson）
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  # 读取 ServiceAccount（用于解析 imagePullSecrets 的引用关系，如未来扩展）
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deplowly
+  namespace: deplowly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deplowly
+subjects:
+  - kind: ServiceAccount
+    name: deplowly
+    namespace: deplowly

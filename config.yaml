@@ -1,0 +1,18 @@
+# deplowly 示例配置
+# 全局默认检查间隔（秒）；每个 target 可通过 interval 覆盖。
+default_interval: 60
+
+targets:
+  # 项目 A：使用默认间隔
+  - namespace: prod
+    deployment: web-api
+
+  # 项目 B：自定义更长间隔
+  - namespace: prod
+    deployment: worker
+    interval: 300
+
+  # 项目 C：自定义更短间隔
+  - namespace: staging
+    deployment: frontend
+    interval: 30
