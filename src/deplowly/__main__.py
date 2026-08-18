@@ -15,7 +15,7 @@ from .watcher import start_watchers
 logger = structlog.get_logger(__name__)
 
 # 已知的子命令。非子命令参数（如配置文件路径）走原 "启动 watcher" 逻辑，保持兼容。
-_SUBCOMMANDS = {"rbac"}
+_SUBCOMMANDS = {"rbac", "check"}
 
 
 def _configure_logging() -> None:
@@ -69,6 +69,10 @@ def main() -> None:
             from . import rbac
 
             sys.exit(rbac.main(argv[1:]))
+        if argv[0] == "check":
+            from . import check
+
+            sys.exit(check.main(argv[1:]))
 
     # 兼容旧用法：deplowly [config_path]，直接启动 watcher
     config_path = argv[0] if argv else "config.yaml"

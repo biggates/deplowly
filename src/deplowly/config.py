@@ -15,13 +15,20 @@ class ConfigError(Exception):
     """Raised when the configuration file is invalid."""
 
 
-def load_config(path: str | Path) -> Config:
-    """Load and validate the YAML configuration file."""
-    path = Path(path)
-    if not path.exists():
-        raise ConfigError(f"config file not found: {path}")
+def load_config(path: str | Path, text: str | None = None) -> Config:
+    """Load and validate the YAML configuration file.
 
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    When ``text`` is given, it is parsed instead of reading ``path``. This is
+    used by the ``check`` command's stdin mode (path is just ``-`` there), so a
+    config can be validated without ever writing it to disk.
+    """
+    path = Path(path)
+    if text is None:
+        if not path.exists():
+            raise ConfigError(f"config file not found: {path}")
+        text = path.read_text(encoding="utf-8")
+
+    raw = yaml.safe_load(text) or {}
     if not isinstance(raw, dict):
         raise ConfigError("top-level config must be a mapping")
 
@@ -44,9 +51,7 @@ def load_config(path: str | Path) -> Config:
         interval = item.get("interval")
         if interval is not None and (not isinstance(interval, int) or interval <= 0):
             raise ConfigError(f"targets[{i}].interval must be a positive integer")
-        targets.append(
-            Target(namespace=str(namespace), deployment=str(deployment), interval=interval)
-        )
+        targets.append(Target(namespace=str(namespace), deployment=str(deployment), interval=interval))
 
     config = Config(default_interval=default_interval, targets=targets)
     logger.info(
