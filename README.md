@@ -63,6 +63,12 @@ kubectl apply -f deploy/deployment.yaml
 
 ## 配置
 
+deplowly 的配置是一个 YAML 文件，通过命令行参数传入。建议在容器启动时一定要显式指定配置路径。
+
+容器内约定路径为 `/etc/deplowly/config.yaml`。
+
+### 配置文件的内容
+
 ```yaml
 default_interval: 60   # 秒，未单独设置 interval 的 target 使用
 targets:
@@ -72,3 +78,7 @@ targets:
     deployment: worker
     interval: 300       # 可覆盖全局间隔
 ```
+
+### Kubernetes 用 ConfigMap 挂载
+
+生产/集群场景推荐用 ConfigMap 把配置注入，而不是打包进镜像。仓库里 `deploy/deployment.yaml` 已经把这两件事都做了。

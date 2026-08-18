@@ -9,7 +9,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: biggates/deplowly:latest
+    image: ghcr.io/biggates/deplowly:latest
     container_name: deplowly
     restart: unless-stopped
     environment:

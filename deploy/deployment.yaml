@@ -33,24 +33,24 @@ spec:
     spec:
       serviceAccountName: deplowly
       containers:
-        - name: deplowly
-          image: ghcr.io/your-org/deplowly:latest
-          args: ["/etc/deplowly/config.yaml"]
-          env:
-            - name: LOG_LEVEL
-              value: "INFO"
-          volumeMounts:
-            - name: config
-              mountPath: /etc/deplowly
-              readOnly: true
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
-      volumes:
+      - name: deplowly
+        image: ghcr.io/biggates/deplowly:latest
+        args: [ "/etc/deplowly/config.yaml" ]
+        env:
+        - name: LOG_LEVEL
+          value: "INFO"
+        volumeMounts:
         - name: config
-          configMap:
-            name: deplowly-config
+          mountPath: /etc/deplowly
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: config
+        configMap:
+          name: deplowly-config
